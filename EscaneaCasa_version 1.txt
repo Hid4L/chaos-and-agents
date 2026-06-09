@@ -1,0 +1,740 @@
+#include <iostream>
+#include <windows.h>        //Para los graficos
+#include <chrono>           //Para los tiempos
+#include <thread>
+
+using namespace std;
+
+#define PI 3.141592 
+#define GUSANOS 7                    //Numero de gusanos en la simulacion
+#define LONGITUD 7                   //Como de largo es el rastro del gusano -2 posiciones: la cola y la que sera la nueva cabeza. Longitud 7 -> cuerpo del gusano es 5 pixels
+#define MEMORIA 8                    //De cuantas cosas se acuerda el gusano 
+#define VISTA 1                      //El gusano ve un cuadrado de VISTA x VISTA desde la cabeza 
+#define VIDA 1800                    //Los ciclos de simulacion que vive un gusano, dependiendo de si ha comido,... segun el comportamiento
+#define PESO 5                       //Los gusanos que se necesitan para mover algo, o para reunirse
+#define CICLOSPERDIDO 500            //Ciclos a los que el gusano decide cambiar de zona de exploracion
+#define CICLOSIMULACION 4000         //Cuantos ciclos vagan en total, por si hay que parar la simulacion en algun momento
+#define DISTANCIAMERODEANDO 10       //La distancia que usan en Merodear()
+#define DISTANCIAEXPLORACION 500     //La distancia a la que se alejan los gusanos de un punto antes de hacer algo mas
+#define PIXELESDELMAPA 4600          //Define cuantos puntos pueden almacenar los gusanos en memoria. Lo calcula el programa y lo escribo aqui
+
+/* Definicion de los gusanos */
+int puntox[GUSANOS][LONGITUD];
+int puntoy[GUSANOS][LONGITUD];              //Las coordenadas x,y de cada gusano.Incluye cola - cuerpo - cabeza 
+int incrementox[9] = { 0,  0,  1, 1, 1, 0, -1, -1, -1 };            //Esta definicion esta repetida en mas sitios
+int incrementoy[9] = { 0, -1, -1, 0, 1, 1,  1,  0, -1 };
+//                         N  NE  E  SE S   SO  O  NO
+//                         1  2   3  4  5   6   7  8
+//Traduce puntos cardinales N es 1, NE 2,... a incrementos. Los puntos cardinales coinciden con los normales. 
+//Punto x,y  0,0 esta en la esquina superior ixquierda de la pantalla. Eje x de izquierda a derecha. Eje y de arriba a a abajo   
+//Dependiendo la direccion, se hace un +/-1 incremento en direccion x o y 
+int vision[3][3];                            //El cuadrado de vision del gusano. 9 veces, una para el centro y 8 para las 8 posibles direcciones: 1, 2, ...
+int escaneo[16];                             //Escaneo alrededor del gusano
+int estado[GUSANOS];                         //Que esta haciendo el gusano
+//Estado 0 vagando.  ...  Estado 9 muerto
+int ciclos[GUSANOS];                        //Contador de simulaciones que se han llevado a cabo para cada gusano, como de viejo es cada gusano
+int color[GUSANOS];                         //El color de cada gusano, que puede usarse para evidenciar el estado: esta durmiendo (azul), esta vagando (blanco),...
+int memoria[GUSANOS][MEMORIA];              //Cosas que sabe el gusano
+//Posiciones 0,1 casa. 2,3 donde nacieron. 4,5 miga. 6,7 objetivo temporal
+int bloqueado[GUSANOS];                     //Seguridad para que los gusanos no se bloqueen. Los saca a otra direccion al azar, reseteandolos a 0. Poco elegante
+
+
+/* Definicion de la mente global */
+int menteglobal = 0;                        //El estado de la mente global, basado en el estado de los gusanos o en decisiones propias
+int simulaciones = 0;                       //Numero de simulaciones totales
+int mapa_x[PIXELESDELMAPA];
+int mapa_y[PIXELESDELMAPA];
+static int coordenada = 0;
+
+/* Comportamientos */
+int Vagar(int);
+int Acercarse(int, int, int);
+int MirarPunto(int, int, int);
+double anguloAleatorio;
+
+/* Funciones de soporte */
+
+void CalculaGusano(int, int);          //Traduce direccion a movimiento, y genera el cuerpo del gusano    
+void DibujaGusanos();                  //Dibuja todos los gusanos. En el futuro a lo mejor no dibujo, solo simulo, o dibujo cada X simulaciones si la velocidad de computo es baja
+void InicializaGusano(int);            //Pone a un gusanos en su lugar de inicio, y tambien en us estado de inicio -color y estado-
+int Escanea(int);                      //Genera vector de escaneado
+void Mira(int);                        //Genera matriz de vision
+void InterpretaCampoVision(int);       //Pasa los pixeles azules a blanco, basicamente
+int InterpretaCampoEscaneado(int);     //Decuelve la direccion de movimiento
+
+void DibujaMapa();
+
+
+/* Manejo de graficos */
+//Get a console handle and a handle to device context. Choose the color of the points
+HWND myconsole = GetConsoleWindow();
+HDC mydc = GetDC(myconsole);
+COLORREF BLANCO = RGB(255, 255, 255);
+COLORREF NEGRO = RGB(0, 0, 0);
+COLORREF AZUL = RGB(0, 0, 255);
+COLORREF AMARILLO = RGB(255, 255, 0);
+COLORREF ROJO = RGB(255, 0, 0);
+
+int main()
+{
+    /* Variables para los gusanos */
+    int gusano;
+    int escaneado;
+
+    /* Contadores,... */
+    int i;
+
+    DibujaMapa();
+    for (gusano = 0; gusano < GUSANOS; gusano++)
+        InicializaGusano(gusano);
+
+    srand(time(NULL));      //PAra que las simulaciones sean diferentes cada vez que se llama al programa
+
+
+    /* 20 octubre. Todo funcionando. Limpio codigo, y meto mapa de casa
+    * A partir de aqui ya ire metiendo estrategias de exploracion
+    *  21 A partir de n ciclos, el gusano cambia de estado. Decide que tiene que cambiar de espacio de exploracion
+    */
+
+    while (menteglobal == 0)
+    {
+
+        DibujaGusanos();
+
+        for (gusano = 0; gusano < GUSANOS; gusano++)
+        {
+            //Si un gusano se bloquea, desaparece y aparece otro en casa. Bueno, en realidad es el mismo que se ha teletransportado
+            //20 es una estimacion de los ciclos que tienen que pasar para considerar que ya no se va a mover mas
+            if (bloqueado[gusano] > 20)
+            {
+                //cout << "Gusano: " << gusano << " bloqueado. ";
+                InicializaGusano(gusano);
+            }
+
+            //Primero escanea
+            //En el momento que esta detectando algo azul, pasa a estado 2
+            escaneado = Escanea(gusano);
+
+            if (escaneado == 1 && estado[gusano] == 1) {      //Detecta algun azul, y estaba explorando. Entonces pasa al estado 2. Resetea los ciclos que llevaba perdido
+                estado[gusano] = 2;                           //Estaba explorando o estaba intentando volver a casa. De momento es lo mismo
+                color[gusano] = AMARILLO;
+                ciclos[gusano] = 0;
+            }
+
+            if (escaneado == 2 && estado[gusano] == 2)        //Ningun azul, y venia de seguir una pared. Entonces pasa al estado 0
+                estado[gusano] = 0;
+
+            if ((escaneado == 3 || escaneado == 4 || escaneado == 5 || escaneado == 6))     //Pared de frente, vuelve a explorar. Pasa a estado 0
+                estado[gusano] = 0;
+
+            //Cada gusano va contando los ciclos que lleva haciendo una cosa u otra. Cuando estan perdidos, llevan nucho tiempo en estado 1 explorando, se vuelven rojos
+            //Entonces se fijan ir al punto inicial, a ver si consiguen llegar. Utilizo el estado 1, pasando por estado 3 -en vez de 0- para fijar el punto casa
+            if (ciclos[gusano] >= CICLOSPERDIDO) {
+                estado[gusano] = 3;
+                color[gusano] = ROJO;
+            }
+
+
+            //Mira antes de mover, a ver si tiene via libre. Asi sabra si es un picon, por ejemplo
+            Mira(gusano);
+            InterpretaCampoVision(gusano);
+
+            //Pone a los gusanos a andar de forma aleatoria
+            if (estado[gusano] == 0)
+            {
+                //Ninguna direccion preferida
+                anguloAleatorio = (rand() % 360 + 1) * (PI / 180);
+                if (escaneado == 3)                                        //Saliendo de pared al Norte, elegir angulos entre 10 y 170 para alejarse
+                    anguloAleatorio = ((rand() % (170 - 10 + 1) + 10)) * (PI / 180);
+                if (escaneado == 4)                                        //Pared al Este, elegir angulos entre 100 y 260
+                    anguloAleatorio = ((rand() % (260 - 100 + 1) + 100)) * (PI / 180);
+                if (escaneado == 5)                                        //Pared al Sur, elegir angulos entre 190 y 350
+                    anguloAleatorio = ((rand() % (350 - 190 + 1) + 190)) * (PI / 180);
+                if (escaneado == 6)                                        //Pared al Oeste, elegir angulos entre 270 y 350. Paso del cuadrante 0 a 90
+                    anguloAleatorio = 280 * (PI / 180);
+                memoria[gusano][6] = puntox[gusano][LONGITUD - 1] + DISTANCIAEXPLORACION * cos(anguloAleatorio);
+                memoria[gusano][7] = puntoy[gusano][LONGITUD - 1] + DISTANCIAEXPLORACION * sin(anguloAleatorio);
+                estado[gusano] = 1;
+            }
+
+            //Pone a los gusanos a andar hacia casa. Es una transicion. Memorias 0 y 1 son casa
+            if (estado[gusano] == 3)
+            {
+                memoria[gusano][6] = memoria[gusano][0];
+                memoria[gusano][7] = memoria[gusano][1];
+                estado[gusano] = 1;
+            }
+
+
+            //Calcula el movimiento
+            //Estado 1, va andando hacia un punto objetivo que ha elegido al azar. Esta explorando. Van sumando los ciclos que lleva sin ver nada
+            if (estado[gusano] == 1) {
+                CalculaGusano(gusano, Acercarse(gusano, memoria[gusano][6], memoria[gusano][7]));
+                ciclos[gusano]++;
+            }
+
+            // Si el estado es 2, la funcion InterpretaCampoEscaneado() es la que manda el movimiento
+            if (estado[gusano] == 2)
+                CalculaGusano(gusano, InterpretaCampoEscaneado(gusano));
+
+            //Ha llegado al punto objetivo, y vuelve a explorar -estado 0-. 5 x VISTA para darle tiempo a alejarse del punto, si no resetea a 0 todo el tiempo
+            if (estado[gusano] == 1 && ciclos[gusano] > 5 * VISTA)
+                if (MirarPunto(gusano, memoria[gusano][6], memoria[gusano][7]) == 1) {
+                    color[gusano] = AMARILLO;
+                    estado[gusano] = 0;
+                    ciclos[gusano] = 0;
+                }
+        }
+
+        if (coordenada >= 3700 || coordenada == PIXELESDELMAPA)  //Un 85% del perimetro, el perimetro son 4375 puntos. Seguridad para no rebentar el vector de mapa
+            menteglobal = 1;
+    }
+
+    /*  Cierre del programa  */
+
+    cout << "Simulacion completada.Pixeles escaneados: " << coordenada << endl;
+    //Dibuja el mapa a la derecha
+    for (i = 0; i <= coordenada; i++)
+        SetPixel(mydc, mapa_x[i] + 600, mapa_y[i], BLANCO);
+
+    //Suelta la consola grafica
+    ReleaseDC(myconsole, mydc);
+    cin.ignore();
+    return (0);
+}
+
+
+
+
+//Inicializa a los gusanos al inicio de la simulacion. Todos en un sitio, al azar,... 
+//Les pone en una posicion, un color y un estado
+void InicializaGusano( int gusano)
+{
+    int j;      //Contador
+
+    //Estado 0 vagando. Ciclos 0 esto es, su edad. Color blanco
+    estado[gusano] = 0;              //El estado 0 lo guardo para Vagar()
+    ciclos[gusano] = 0;
+    bloqueado[gusano] = 0;
+    color[gusano] = AMARILLO;        //Para que no se vean entre ellos. Los gusanos deben ser ciegos al amarillo
+    memoria[gusano][0] = 250;        //Casa - sera la entrada a la casa
+    memoria[gusano][1] = 300;
+    
+    //Crea el cuerpo del gusano, los 5 pixeles en el mismo punto
+    for (j = 0; j < LONGITUD; j++)              
+    {
+        puntox[gusano][j] = memoria[gusano][0];
+        puntoy[gusano][j] = memoria[gusano][1];
+    }
+
+
+}
+
+//Dibuja todos los gusanos en cada ciclo. Si GUSANOS es 3, el nombre de los gusanos es 0,1 y 2
+void DibujaGusanos()
+{
+    int gusano;
+    int j;          //Contador
+
+    using namespace std::this_thread;     // sleep_for, sleep_until
+    using namespace std::chrono_literals; // ns, us, ms, s, h, etc.
+    using std::chrono::system_clock;
+
+    for (gusano = 0; gusano < GUSANOS; gusano++)
+    {
+        SetPixel(mydc, puntox[gusano][0], puntoy[gusano][0], NEGRO);       //El punto 0 que es la cola lo borra siempre. 
+        for (j = 1; j < (LONGITUD - 1); j++)                               //Ojo, desde 1 y hasta dos posiciones menos que LONGITUD. Si LONGITUD = 7, longitud del gusano 5
+            SetPixel(mydc, puntox[gusano][j], puntoy[gusano][j], color[gusano]);
+    }
+    //sleep_for(200us);       // Para que no se mueva demasiado rapido. Igual con varios gusanos no hace ni falta
+}
+
+//Calcula el cuerpo gusano en una direccion, y estos son los 2 argumentos que recibe
+void CalculaGusano(int gusano, int direccion)
+{
+    int j = 0;                  //Contador
+
+    //La cabeza la calcula siempre
+    puntox[gusano][LONGITUD - 1] = puntox[gusano][LONGITUD - 2] + incrementox[direccion];
+    puntoy[gusano][LONGITUD - 1] = puntoy[gusano][LONGITUD - 2] + incrementoy[direccion];
+
+    //El cuerpo se desplaza solo si la cabeza no se la va a pegar contra un pixel blanco.Si no, no se mueve esta vez, espera a la siguiente direccion
+    if (GetPixel(mydc, puntox[gusano][LONGITUD - 1], puntoy[gusano][LONGITUD - 1]) != BLANCO)
+        for (j = 0; j < (LONGITUD - 1); j++)                            //Mueve las posiciones dentro de la matriz para crear la sensacion de movimiento
+        {
+            puntox[gusano][j] = puntox[gusano][j + 1];
+            puntoy[gusano][j] = puntoy[gusano][j + 1];
+            bloqueado[gusano] = 0;
+        }
+    else
+        bloqueado[gusano]++;
+}
+
+
+//Genera el campo de vision vision[][] 
+void Mira(int gusano)
+{
+
+    int i = 0;
+    int j = 0;                                      //Contadores
+    int puntotempx;
+    int puntotempy;                                 //Puntos que van barriendo el campo de vision
+
+    int negro = 0;                                  //Codificacion de color a numero. Las mayusculas son para los colores en RGB
+    int blanco = 1;
+    int azul = 2;
+    int amarillo = 3;
+    COLORREF colordelpixel;
+
+    //Inicializo el vector, al ser variable global puede dar problemas
+    for (i = -VISTA; i <= VISTA; i++)
+        for (j = -VISTA; j <= VISTA; j++)
+            vision[i + 1][j + 1] = negro;
+
+    for (i = -VISTA; i <= VISTA; i++)
+    {
+        puntotempx = puntox[gusano][LONGITUD - 1] + i;
+        for (j = -VISTA; j <= VISTA; j++)
+        {
+            puntotempy = puntoy[gusano][LONGITUD - 1] + j;
+            colordelpixel = GetPixel(mydc, puntotempx, puntotempy);
+            if (colordelpixel == NEGRO)
+                vision[i + 1][j + 1] = negro;
+            if (colordelpixel == AMARILLO)
+                vision[i + 1][j + 1] = amarillo;
+            if (colordelpixel == BLANCO)
+                vision[i + 1][j + 1] = blanco;
+            if (colordelpixel == AZUL)
+                vision[i + 1][j + 1] = azul;
+        }
+    }
+}
+
+//Lo que hace con el campo de vision
+//De momento los puntos azules los pasa a blancos y los guarda en un vector de memoria
+void InterpretaCampoVision(int gusano)
+{
+    int i = 0;
+    int j = 0;                                      //Contadores
+    int puntotempx;
+    int puntotempy;                                 //Puntos que van barriendo el campo de vision
+
+    int negro = 0;                                  //Codificacion de color a numero. Las mayusculas son para los colores en RGB
+    int blanco = 1;
+    int azul = 2;
+    int amarillo = 3;
+
+    for (i = -VISTA; i <= VISTA; i++)
+    {
+        puntotempx = puntox[gusano][LONGITUD - 1] + i;
+        for (j = -VISTA; j <= VISTA; j++)
+        {
+            puntotempy = puntoy[gusano][LONGITUD - 1] + j;
+            if (vision[i + 1][j + 1] == azul)
+            {
+                mapa_x[coordenada] = puntotempx;
+                mapa_y[coordenada] = puntotempy;
+                coordenada++;
+                SetPixel(mydc, puntotempx, puntotempy, BLANCO);
+            }
+        }
+    }
+}
+
+
+//Crea el vector de escaneo escaneo[]
+int Escanea(int gusano)
+{
+
+    int i = 0;
+    int j = 0;
+    int k = 0;                                          //Contadores
+    int pixeles = 0;
+
+    int negro = 0;                                     //Codificacion de color a numero. Las mayusculas son para los colores en RGB
+    int blanco = 1;
+    int azul = 2;
+    int amarillo = 3;
+    COLORREF colordelpixel;
+
+    //Inicializo el vector, al ser variable global parece que daba problemas
+    for (i = 0; i <= 15; i++)
+        escaneo[i] = negro;
+
+    //Empieza en posicion 0, la primera posicion para ver el Norte. Costruyo el vector por filas, y con mucho cuidado
+
+    for (i = 0; i <= 3; i++)                           //Fila de arriba, empezando por posicion 0
+    {
+        colordelpixel = GetPixel(mydc, puntox[gusano][LONGITUD - 1] + i - 1, puntoy[gusano][LONGITUD - 1] - 2);
+        if (colordelpixel == NEGRO)
+            escaneo[i] = negro;
+        if (colordelpixel == AMARILLO)
+            escaneo[i] = amarillo;
+        if (colordelpixel == BLANCO)
+            escaneo[i] = blanco;
+        if (colordelpixel == AZUL)
+            escaneo[i] = azul;
+    }
+
+    for (i = 4; i <= 7; i++)
+    {
+        colordelpixel = GetPixel(mydc, puntox[gusano][LONGITUD - 1] + 2, puntoy[gusano][LONGITUD - 1] + i - 5);
+        if (colordelpixel == NEGRO)
+            escaneo[i] = negro;
+        if (colordelpixel == AMARILLO)
+            escaneo[i] = amarillo;
+        if (colordelpixel == BLANCO)
+            escaneo[i] = blanco;
+        if (colordelpixel == AZUL)
+            escaneo[i] = azul;
+    }
+
+
+    for (i = 8; i <= 11; i++)
+    {
+        colordelpixel = GetPixel(mydc, puntox[gusano][LONGITUD - 1] + 9 - i, puntoy[gusano][LONGITUD - 1] + 2);
+        if (colordelpixel == NEGRO)
+            escaneo[i] = negro;
+        if (colordelpixel == AMARILLO)
+            escaneo[i] = amarillo;
+        if (colordelpixel == BLANCO)
+            escaneo[i] = blanco;
+        if (colordelpixel == AZUL)
+            escaneo[i] = azul;
+    }
+
+
+    for (i = 12; i <= 15; i++)
+    {
+        colordelpixel = GetPixel(mydc, puntox[gusano][LONGITUD - 1] - 2, puntoy[gusano][LONGITUD - 1] + 13 - i);
+        if (colordelpixel == NEGRO)
+            escaneo[i] = negro;
+        if (colordelpixel == AMARILLO)
+            escaneo[i] = amarillo;
+        if (colordelpixel == BLANCO)
+            escaneo[i] = blanco;
+        if (colordelpixel == AZUL)
+            escaneo[i] = azul;
+    }
+
+
+    //Empieza a seguir la pared, se encuentra un blanco, y se queda pegado - con estas lineas consigo solucionar esto
+    if (escaneo[14] == blanco && escaneo[4] == blanco && escaneo[15] == negro && escaneo[0] == negro && escaneo[1] == negro && escaneo[2] == negro && escaneo[3] == negro) {
+        pixeles = 3;
+        return(pixeles);
+    }
+    if (escaneo[2] == blanco && escaneo[8] == blanco && escaneo[3] == negro && escaneo[4] == negro && escaneo[5] == negro && escaneo[6] == negro && escaneo[7] == negro) {
+        pixeles = 4;
+        return(pixeles);
+    }
+    if (escaneo[6] == blanco && escaneo[12] == blanco && escaneo[7] == negro && escaneo[8] == negro && escaneo[9] == negro && escaneo[10] == negro && escaneo[11] == negro) {
+        pixeles = 5;
+        return(pixeles);
+    }
+    if (escaneo[0] == blanco && escaneo[10] == blanco && escaneo[11] == negro && escaneo[12] == negro && escaneo[13] == negro && escaneo[14] == negro && escaneo[15] == negro) {
+        pixeles = 6;
+        return(pixeles);
+    }
+
+    //Se da de frente contra una pared explorada al norte, este, sur y oeste. Se aleja y punto
+    if (escaneo[15] == blanco && escaneo[0] == blanco && escaneo[1] == blanco && escaneo[2] == blanco && escaneo[3] == blanco) {
+        pixeles = 3;
+        return(pixeles);
+    }
+    if (escaneo[3] == blanco && escaneo[4] == blanco && escaneo[5] == blanco && escaneo[6] == blanco && escaneo[7] == blanco) {
+        pixeles = 4;
+        return(pixeles);
+    }
+    if (escaneo[7] == blanco && escaneo[8] == blanco && escaneo[9] == blanco && escaneo[10] == blanco && escaneo[11] == blanco) {
+        pixeles = 5;
+        return(pixeles);
+    }
+    if (escaneo[11] == blanco && escaneo[12] == blanco && escaneo[13] == blanco && escaneo[14] == blanco && escaneo[15] == blanco) {
+        pixeles = 6;
+        return(pixeles);
+    }
+
+    //Ojo, que si todo esta negro alrededor tiene que seguir explorando
+    //Si detecta algun blanco - o sea que no hay nada que explorar- devuelve 2
+    for (i = 0; i <= 15; i++)
+        if (escaneo[i] == blanco)
+            pixeles = 2;
+
+    //.. y ningun azul, devuelve 1, y este valor pisa al anterior
+    for (i = 0; i <= 15; i++)
+        if (escaneo[i] == azul) {
+            pixeles = 1;
+            return(pixeles);
+        }
+
+    return(pixeles);
+}
+
+
+//Devuelve una direccion. Basandose en calculos con el vector de escaneo
+int InterpretaCampoEscaneado(int gusano)
+{
+    int i = 0;
+    int j = 0;
+    int negro = 0;                                  //Codificacion de color a numero. Las mayusculas son para los colores en RGB
+    int blanco = 1;
+    int azul = 2;
+    int amarillo = 3;
+
+    //int sumadelvector = 0;
+    int sensor_norteazul;
+    int sensor_surazul;
+    int sensor_esteazul;
+    int sensor_oesteazul;                            //Suma de los 3 sensores en cada una de las direcciones - azul
+    int sensor_norteblanco;
+    int sensor_surblanco;
+    int sensor_esteblanco;
+    int sensor_oesteblanco;                          //Suma de los 3 sensores en cada una de las direcciones - blanco
+    int vectordeazules[16];
+    int vectordeblancos[16];
+    int direccion = 0;
+
+    //Reinicia vectores
+    for (i = 0; i <= 15; i++)
+        vectordeazules[i] = 0;
+    for (i = 0; i <= 15; i++)
+        vectordeblancos[i] = 0;
+
+    //Traduce azules a 1s
+    for (i = 0; i <= 15; i++)
+        if (escaneo[i] == azul)
+            vectordeazules[i] = 1;
+
+    //Traduce blancos a 1s
+    for (i = 0; i <= 15; i++)
+        if (escaneo[i] == blanco)
+            vectordeblancos[i] = 1;
+
+    sensor_norteazul = vectordeazules[0] + vectordeazules[1] + vectordeazules[2];
+    sensor_esteazul = vectordeazules[4] + vectordeazules[5] + vectordeazules[6];
+    sensor_surazul = vectordeazules[8] + vectordeazules[9] + vectordeazules[10];
+    sensor_oesteazul = vectordeazules[12] + vectordeazules[13] + vectordeazules[14];
+
+    sensor_norteblanco = vectordeblancos[0] + vectordeblancos[1] + vectordeblancos[2];
+    sensor_esteblanco = vectordeblancos[4] + vectordeblancos[5] + vectordeblancos[6];
+    sensor_surblanco = vectordeblancos[8] + vectordeblancos[9] + vectordeblancos[10];
+    sensor_oesteblanco = vectordeblancos[12] + vectordeblancos[13] + vectordeblancos[14];
+
+    //Detecta pared y via libre en la direccion de movimiento. LA utlima eleccion tiene prioridad, meter alguna condicion luego -gusanos pares, impares,...-
+    //Detecta esquina es como detecta pared
+    //Estas detecciones tienen prioridad, por eso se incluyen los return()
+    if (sensor_norteazul >= 1 && vision[1][0] == negro)
+    {
+        direccion = 1;
+        return (direccion);
+    }
+    if (sensor_esteazul >= 1 && vision[2][1] == negro)
+    {
+        direccion = 3;
+        return (direccion);
+    }
+    if (sensor_surazul >= 1 && vision[1][2] == negro)
+    {
+        direccion = 5;
+
+        return (direccion);
+    }
+    if (sensor_oesteazul >= 1 && vision[0][1] == negro) {
+        direccion = 7;
+        return (direccion);
+    }
+
+    //Picones. Detecta un punto azul al que quiere llegar, pero tiene que seguir la pared 2 incrementos mas antes de girar porque un trozo de nuro no le deja llegar
+    if (sensor_norteazul >= 1 && vision[1][0] == blanco)
+    {
+        if (sensor_oesteblanco >= 1)
+            direccion = 3;
+        if (sensor_esteblanco >= 1)
+            direccion = 7;
+    }
+    if (sensor_esteazul >= 1 && vision[2][1] == blanco)      //Punto azul por explorar esta al este, pero no puede llegar
+    {
+        if (sensor_norteblanco >= 1)                         //Norte estaba explorado, va al sur
+            direccion = 5;
+        if (sensor_surblanco >= 1)                           //Sur estaba explorado, va al norte
+            direccion = 1;
+    }
+    if (sensor_surazul >= 1 && vision[1][2] == blanco)
+    {
+        //cout << sensor_oesteblanco << ".." << sensor_esteblanco << endl;
+        if (sensor_oesteblanco >= 1)
+            direccion = 3;
+        if (sensor_esteblanco >= 1)
+            direccion = 7;
+    }
+    if (sensor_oesteazul >= 1 && vision[0][1] == blanco)
+    {
+        if (sensor_norteblanco >= 1)
+            direccion = 5;
+        if (sensor_surblanco >= 1)
+            direccion = 1;
+    }
+
+    //Comodin. Al menos que no se quede quieto. Podria mejorar detectando esquinas y picones, pero no creo que se gane mucho en terminos de deteccion
+    if (direccion == 0)
+        direccion = rand() % 8 + 1;
+
+    return (direccion);
+
+}
+
+/* Acciones de los gusanos  */
+
+//Anda de forma aleatoria. Direccion es hacia donde se va a mover del 1 al 8 (Luego se traducira en N a SO)
+int Vagar(int gusano)
+{
+    int direccion;
+
+    direccion = rand() % 8 + 1;
+    return (direccion);
+}
+
+
+
+//Va a elegir una direccion al azar. Si la distancia al objetivo yendo en esa direccion es menor que la distancia a la que se encuentra, la usa
+//Se obtiene un movimiento mas natural, como si el gusano olfateara el punto objetivo
+int Acercarse(int gusano, int puntoenx, int puntoeny)
+{
+    int direccionPosible = 0;
+    int direccion = 0;           //Esta direccion se inicializa a 0 para que entre en el while. direccionPosible es la direccion que considera
+    int puntoxtemp = 0;
+    int puntoytemp = 0;          //El punto hacia el que va. Lo uso para que se vea mejor el calculo, no usar formulas demasiado largas
+    double distanciaCabeza = 0;
+    double distancia = 0;        //Distancia de la cabeza al objetivo, y desde el punto al que se moveria al objetivo
+    int i = 0;                   //Un contador
+
+    distanciaCabeza = sqrt(pow((puntox[gusano][LONGITUD - 1] - puntoenx), 2) + pow((puntoy[gusano][LONGITUD - 1] - puntoeny), 2));
+    while (direccion == 0)
+    {
+        direccionPosible = rand() % 8 + 1;                                                              //Elige una direccion al azar
+
+        puntoxtemp = puntox[gusano][LONGITUD - 1] + incrementox[direccionPosible];
+        puntoytemp = puntoy[gusano][LONGITUD - 1] + incrementoy[direccionPosible];                      //Este es el punto hacia el que podria moverse
+        distancia = sqrt(pow((puntoxtemp - puntoenx), 2) + pow((puntoytemp - puntoeny), 2));
+
+        if (distancia < distanciaCabeza)
+            direccion = direccionPosible;                                                              //Si reduce distancia usando esa direccion, la elige y sale del while
+
+        i++;                    //Para evitar que se quede en bucle, sale por algun sitio
+        if (i > 16)
+            direccion = direccionPosible;
+    }
+    return(direccion);
+}
+
+//Mira si esta cerca de un punto. Devuelve 1 TRUE si ha visto algo
+int MirarPunto(int gusano, int puntoobjetivox, int puntoobjetivoy)
+{
+    int visto = 0;
+    int i;
+    int j;                   //Contadores
+    int puntotempx = 0;
+    int puntotempy = 0;      //Van barriendo el cuadrado de vision del gusano
+
+    for (i = -VISTA; i <= VISTA; i++)
+    {
+        puntotempx = puntox[gusano][LONGITUD - 1] + i;                                          //Dejo estas dos variables, por claridad. LONGITUD - 1 es la cabeza
+        for (j = -VISTA; j <= VISTA; j++)
+        {
+            puntotempy = puntoy[gusano][LONGITUD - 1] + j;
+            if ((puntotempx == puntoobjetivox) && (puntotempy == puntoobjetivoy))               //Norma 1 para medir la distancia de la vista
+                visto = 1;
+        }
+    }
+    return (visto);
+}
+
+void DibujaMapa()
+{
+
+    int i;
+    int j;
+    int k;
+
+    int lineashorizontales = 13;            //Numero de lineas horizontales y verticales que tiene el mapa
+    int lineasverticales = 13;
+    int obstaculos = 10;
+    int lado = 25;                         //Dimensiones de los obstaculos en la casa 
+
+
+    /* Escenario de la simulacion */
+    //El contorno de la casa son las primeras 13 lineas horinzontales y verticales -que coincidencia-. 14,... con los muebles
+    int linea_horizontal[] = { 25,125,125,225,225, 225,300,275,325,325,400,425,475 };           //Coordenada y de la linea horizontal;
+    int linea_horizontal_inicio[] = { 25,25,275,25,100, 275,25,275,50,225,50, 25,25 };    //Inicio x, final x. Si resto este vector y el abajo elemento a elemento obtendre la longitud de la linea
+    int linea_horizontal_final[] = { 450,225,400,75,225,400,50,400,175,450, 175,50,225 };
+    int linea_vertical[] = { 25,50, 50,25, 175,175, 225,225, 225, 275,275,275,400,450 };         //Coordenada x de la linea vertical. Los vectores de abajo lo mismo
+    int linea_vertical_inicio[] = { 25,300,400,425,225,325, 25,125,225,25,150,275,25,25 };         //Inicio y final en y
+    int linea_vertical_final[] = { 300,325,425,475,300,400, 75,175,475,75, 250,300,300,325 };
+    int muro_x;                                                                                              //Coordenadas x e y de las lineas -o muros-
+    int muro_y;
+
+    int cuadrado_x[] = { 50,75,150,350,75,100,75,100,75,100 };
+    int cuadrado_y[] = { 150,150,150,150,275,275,50,50,75,75 };
+
+    int pixeles_horizontales = 0;
+    int pixeles_verticales = 0;
+    int pixelesdelmapa = 0;
+
+    //Baja el cursor n lineas
+    for (i = 0; i < 28; i++)
+        cout << endl;
+
+    //Dibuja el perfil
+    for (i = 0; i <= lineashorizontales; i++)
+    {
+        for (j = linea_horizontal_inicio[i]; j <= linea_horizontal_final[i]; j++)
+        {
+            muro_x = j;
+            muro_y = linea_horizontal[i];
+            SetPixel(mydc, muro_x, muro_y, AZUL);
+        }
+    }
+    for (i = 0; i <= lineasverticales; i++)
+    {
+        for (j = linea_vertical_inicio[i]; j <= linea_vertical_final[i]; j++)
+        {
+            muro_x = linea_vertical[i];
+            muro_y = j;
+            SetPixel(mydc, muro_x, muro_y, AZUL);
+        }
+    }
+
+    //NUmero de pixeles del perfil
+    for (i = 0; i <= lineashorizontales; i++)
+        pixeles_horizontales += linea_horizontal_final[i] - linea_horizontal_inicio[i];
+    for (i = 0; i <= lineasverticales; i++)
+        pixeles_verticales += linea_vertical_final[i] - linea_vertical_inicio[i];
+
+
+    //Dibuja los obstaculos
+    for (k = 0; k < obstaculos; k++)
+    {
+        for (i = 0; i <= lado; i++)
+        {
+            muro_x = cuadrado_x[k] + i;
+            muro_y = cuadrado_y[k];
+            SetPixel(mydc, muro_x, muro_y, AZUL);
+            muro_y = cuadrado_y[k] + lado;
+            SetPixel(mydc, muro_x, muro_y, AZUL);
+        }
+
+        for (i = 0; i <= lado; i++)
+        {
+            muro_y = cuadrado_y[k] + i;
+            muro_x = cuadrado_x[k];
+            SetPixel(mydc, muro_x, muro_y, AZUL);
+            muro_x = cuadrado_x[k] + lado;
+            SetPixel(mydc, muro_x, muro_y, AZUL);
+        }
+
+    }
+
+    pixelesdelmapa = pixeles_horizontales + pixeles_verticales + obstaculos * lado * 4 - 6 * lado;
+    //cout << "Pixeles en el mapa:" << pixelesdelmapa;
+
+}

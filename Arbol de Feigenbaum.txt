@@ -1,0 +1,78 @@
+#include <windows.h>
+#include <iostream>
+#include <stdio.h>
+#include <math.h>
+
+using namespace std;            // Esto lo usa la función cin.ignore()
+
+#define PIXELSX 1080            //Resolucion en pixeles de la pantalla, ancho y largo 1080 / 8 = 135; 
+#define PIXELSY 560             
+
+int main()                     //Dibuja el arbol de Feigenbaum
+{
+
+    double AMIN = 1.0;         //Puntos maximos y minimos de los valores a 1.0 - 4.0 y x. Ejemplo pagina 589 Chaos and Fractals
+    double AMAX = 4.0;         //El dibujo se distorsionara, porque el dibujo en pantalla es un cuadrado
+    double XMIN = 0.0;
+    double XMAX = 1.0;
+
+    int puntox = 0;           // Estos son los puntos que barren la pantalla, por eso son enteros
+    int puntoy = 0;     
+    double a = 0.0;           //Parametro a, que se dibujara el eje horizontal o de las x
+    double x = 0.0;           //Valor x del iterador cuadratico, que se dibujara el eje vertical o de las y
+    double semillax = 0.01;    //x0 para empezar las iteraciones, debe ser un valor entre 0 y 1
+    int iteracionesmax = 200; //Iteraciones maximas para x, iteraciones a partir de las cuales empieza a dibujar las soluciones de las x
+    int iteracionesdibuja = 100;
+    double escalax;           //Para pasar los valores en el plano real a los valores en pantalla
+    double escalay;
+    int i = 0;                // Un par de contadores
+    int j = 0;                   
+
+    //Get a console handle and a handle to device context. Choose the color of the points
+    HWND myconsole = GetConsoleWindow();
+    HDC mydc = GetDC(myconsole);
+    COLORREF BLANCO = RGB(255, 255, 255);
+    COLORREF NEGRO = RGB(0, 0, 0);
+
+    escalax = (PIXELSX / (AMAX - AMIN));   //Las escalas son fijas ahora, pero se podran modificar luego cambiando los valores de calculo
+    escalay = (PIXELSY / (XMAX - XMIN));
+    
+    //Algoritmo cogido de Chaos and Fractals, pagina 586
+    //Barro el plano real con los valores del parametro a
+    for (a = AMIN; a <= AMAX; a += (1/escalax))     
+    {
+        puntox = escalax * (a - AMIN);                  //Calcula el punto para el parametro a, ajusta a la derecha pra AMIN
+        // Xn+1  = a Xn (1-Xn) es el iterador cuadratico
+        // En este bucle descarto las primeras iteraciones, si comento las dos primeras lineas del for
+        x = semillax;
+        for (i = 0; i < iteracionesdibuja; i++)
+        {
+            //puntoy = escalay * (XMAX - x);                //Calcula el punto para la solucion x, invierte los valores en la plantalla
+            //SetPixel(mydc, puntox, puntoy, BLANCO);
+            x = a * x * (1 - x);
+        }
+        //En este bucle ya dibujo las soluciones. Ojo, que tengo que pintar en blanco porque la pantalla es negra
+        for (i = iteracionesdibuja; i < iteracionesmax; i++)
+        {
+            x = a * x * (1 - x);
+            puntoy= escalay * (XMAX -x);                //Calcula el punto para la solucion x, invierte los valores en la plantalla
+            SetPixel(mydc, puntox, puntoy, BLANCO);
+        }
+    }
+
+    // Cierre del programa
+    cout << "Listo";
+    ReleaseDC(myconsole, mydc);
+    cin.ignore();
+    return 0;
+}
+
+/*
+#define PANTALLA 320           //Dibujamos en un cuadrado de 700 x 700...
+#define XYMAXIMO 2.0            //... que corresponde a la coordenada maxima y mínima en el plano z
+
+for (y = -1 * XYMAXIMO; y <= XYMAXIMO; y = y + (XYMAXIMO / PANTALLA))  
+for (x = -1 * XYMAXIMO; x <= XYMAXIMO; x = x + (XYMAXIMO / PANTALLA))
+puntox = (PANTALLA / XYMAXIMO) * x + PANTALLA;              
+puntoy = -(PANTALLA / XYMAXIMO) * y + PANTALLA;
+*/
