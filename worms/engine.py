@@ -155,3 +155,39 @@ class Engine:
             ],
             "ticks": self.ticks
         }
+class EvoWorld:
+    def __init__(self, config):
+        self.config = config
+        self.worms = []
+        self.food = []
+
+        for _ in range(config.NUM_WORMS):
+            self.worms.append(
+                EvoWorm(
+                    random.randint(0, config.WIDTH),
+                    random.randint(0, config.HEIGHT),
+                    config
+                )
+            )
+
+        for _ in range(config.NUM_FOOD):
+            self.food.append(Food(config))
+
+    def update(self):
+        # comida
+        if len(self.food) < self.config.NUM_FOOD:
+            self.food.append(Food(self.config))
+
+        new_worms = []
+
+        for w in self.worms:
+            w.update(self.food)
+
+            baby = w.reproduce()
+            if baby:
+                new_worms.append(baby)
+
+        self.worms.extend(new_worms)
+
+        # limpieza de muertos
+        self.worms = [w for w in self.worms if w.alive]
