@@ -24,8 +24,8 @@ const growthSlider = document.getElementById("growth");
 // WEBSOCKET
 // =========================
 function connect() {
-    ws = new WebSocket("ws://127.0.0.1:8000/ws");
-
+  //  ws = new WebSocket("ws://127.0.0.1:8000/ws");
+  //  ws = new WebSocket("ws://127.0.0.1:8000/ws");
     ws.onopen = () => {
         console.log("🟢 WS conectado");
     };
