@@ -1,5 +1,5 @@
 import matplotlib.pyplot as plt
-
+import math
 
 def run(config):
 
@@ -35,3 +35,8 @@ def run(config):
     ax.set_title("Lorenz Attractor")
 
     plt.show()
+
+def safe_float(x):
+    if math.isnan(x) or math.isinf(x):
+        return 0.0
+    return x

@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Chaos V3 - Life Engine</title>
+</head>
+<body style="margin:0; background:black;">
+
+
+
+<canvas id="canvas"></canvas>
+
+<div style="position:fixed;top:10px;left:10px;color:white;">
+    
+    <button onclick="reset()">RESET</button>
+
+    <select id="system">
+        <option value="henon">Henon</option>
+        <option value="lorenz">Lorenz</option>
+        <option value="rossler">Rossler</option>
+        <option value="julia">Julia</option>
+    </select>
+
+    <br><br>
+
+    a <input id="a" type="range" min="0" max="3" step="0.01" value="1.4"><br>
+    b <input id="b" type="range" min="0" max="1" step="0.01" value="0.3"><br>
+    damping <input id="damping" type="range" min="0.9" max="1" step="0.001" value="0.98"><br>
+    speed <input id="speed" type="range" min="0" max="3" step="0.01" value="1">
+    growth <input id="growth" type="range" min="0.2" max="3" step="0.1" value="1">
+</div>
+
+<script src="app.js"></script>
+
+</body>
+</html>

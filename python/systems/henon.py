@@ -23,3 +23,8 @@ def run(config):
     plt.scatter(xs, ys, s=0.1)
     plt.title("Henon Attractor")
     plt.show()
+
+def safe_float(x):
+    if math.isnan(x) or math.isinf(x):
+        return 0.0
+    return x

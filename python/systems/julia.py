@@ -1,6 +1,6 @@
 import matplotlib.pyplot as plt
 import numpy as np
-
+import math
 
 def run(config):
 
@@ -35,3 +35,8 @@ def run(config):
     plt.title("Julia Set")
     plt.axis("equal")
     plt.show()
+
+def safe_float(x):
+    if math.isnan(x) or math.isinf(x):
+        return 0.0
+    return x

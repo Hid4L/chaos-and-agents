@@ -1,4 +1,6 @@
-*.exe
-*.obj
-*.o
+__pycache__/
+*.pyc
+.env
 .vscode/
+node_modules/
+.DS_Store
